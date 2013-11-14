@@ -1,0 +1,313 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+# (c) 2013, serge van Ginderachter <serge@vanginderachter.be>
+# based on Matt Hite's bigip_pool module
+# (c) 2013, Matt Hite <mhite@hotmail.com>
+#
+# This file is part of Ansible
+#
+# Ansible is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Ansible is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
+
+DOCUMENTATION = '''
+---
+module: bigip_virtual
+short_description: "Manages F5 BIG-IP LTM virtual servers"
+description:
+    - "Manages F5 BIG-IP LTM virtual servers via iControl SOAP API"
+version_added: "1.5"
+author: Serge van Ginderachter
+notes:
+    - "Requires BIG-IP software version >= 11"
+    - "F5 developed module 'bigsuds' required (see http://devcentral.f5.com)"
+    - "Best run as a local_action in your playbook"
+    - "Monitor API documentation: https://devcentral.f5.com/wiki/iControl.LocalLB__VirtualServer.ashx
+requirements:
+    - bigsuds Python library: https://devcentral.f5.com/wiki/iControl.Python-Bigsuds-Library.ashx
+options:
+    server:
+        description:
+            - BIG-IP host
+        required: true
+        default: null
+    user:
+        description:
+            - BIG-IP username
+        required: true
+        default: null
+    password:
+        description:
+            - BIG-IP password
+        required: true
+        default: null
+    state:
+        description:
+            - Monitor state
+        required: false
+        default: 'present'
+        choices: ['present', 'absent']
+    name:
+        description:
+            - Virtual Server name
+        required: true
+        default: null
+        aliases: ['virtual']
+    partition:
+        description:
+            - Partition for the virtual server
+        required: false
+        default: 'Common'
+'''
+
+EXAMPLES = '''
+
+'''
+
+try:
+    import bigsuds
+except ImportError:
+    bigsuds_found = False
+else:
+    bigsuds_found = True
+
+
+# ===========================================
+# module methods.
+#
+
+def bigip_api(bigip, user, password):
+
+    api = bigsuds.BIGIP(hostname=bigip, username=user, password=password)
+    return api
+
+
+def virtual_exists(module, api, virtualserver):
+
+    # hack to check if virtual exists
+    try:
+        api.LocalLB.VirtualServer.get_description(virtual_servers=[virtualserver])
+    except: bigsuds.OperationFailed, error:
+        if 'requested virtual server' in str(e) and 'was not found' in str(e):
+            return False
+        else:
+            module.fail_json(msg=error)
+    except Exception as error:
+        module.fail_json(msg=error)
+    return True
+
+
+def create_virtual(module, api, virtualserver, virtual_server_definition, virtual_server_resource, mask, profile=[{}]):
+
+    try: 
+        api.LocalLB.VirtualServer.create(definitions=[virtual_server_definition], 
+                                                      wildmasks=[mask], 
+                                                      resources=[virtual_server_resource], 
+                                                      profiles=[profile])
+    except bigsuds.OperationFailed, e:
+        if "already exists" in str(e):
+            return False
+        else:
+            module.fail_json(msg=error)
+    except Exception as error:
+        module.fail_json(msg=error)
+    # in some cases the create method silently does nothing
+    # e.g. when an empty resource struct is passed
+    if virtual_exists(module, api, virtualserver):
+        return True
+    else:
+        module.fail_json(msg="No VirtualServer was created. You might have missing parameters.")
+
+
+def delete_virtual(module, api, virtualserver):
+
+    try:
+        api.LocalLB.VirtualServer.delete_virtual_server(virtual_servers=[virtualserver])
+    except bigsuds.OperationFailed, e:
+        # maybe it was deleted since we checked
+        if 'requested virtual server' in str(e) and 'was not found' in str(e):
+            return False
+        else:
+            module.fail_json(msg=error)
+    except Exception as error:
+        module.fail_json(msg=error)
+    return True
+
+def update_description(module, api, virtualserver, description):
+    
+    cur_desc = api.LocalLB.VirtualServer.get_description(
+                            virtual_servers=[virtualserver])
+    if cur_desc == [description]:
+        return False
+    else:
+        api.LocalLB.VirtualServer.set_description(
+                            virtual_servers=[virtualserver],
+                            descriptions=[descriptions])
+        return True
+        
+
+def update_destination(module, api, virtualserver, addressport):
+    
+    cur_ap = api.LocalLB.VirtualServer.get_destination_v2(
+                            virtual_servers=[virtualserver])
+    if cur_ap == [addressport]:
+        return False
+    else:
+        api.LocalLB.VirtualServer.set_destination_v2(
+                            virtual_servers=[virtualserver],
+                            destinations=[addressport])
+        return True
+        
+
+def update_wildmask(module, api, virtualserver, mask):
+    
+    cur_mask = api.LocalLB.VirtualServer.get_wildmask(
+                            virtual_servers=[virtualserver])
+    if cur_mask == [mask]:
+        return False
+    else:
+        api.LocalLB.VirtualServer.set_wildmask(
+                            virtual_servers=[virtualserver],
+                            wildmasks=[mask])
+        return True
+        
+
+def update_protocol(module, api, virtualserver, protocol):
+    
+    cur_protocol = api.LocalLB.VirtualServer.get_protocol(
+                            virtual_servers=[virtualserver])
+    if cur_protocol == [protocol]:
+        return False
+    else:
+        api.LocalLB.VirtualServer.set_protocol(
+                            virtual_servers=[virtualserver],
+                            protocols=[protocol])
+        return True
+        
+
+def update_pool(module, api, virtualserver, pool):
+    
+    cur_pool = api.LocalLB.VirtualServer.get_pool(
+                            virtual_servers=[virtualserver])
+    if cur_pool == [pool]:
+        return False
+    else:
+        api.LocalLB.VirtualServer.set_protocol(
+                            virtual_servers=[virtualserver],
+                            pools=[pool])
+        return True
+
+
+def update_type(module, api, virtualserver, type):
+
+    
+    cur_type = api.LocalLB.VirtualServer.get_type(
+                            virtual_servers=[virtualserver])
+    if cur_type == [type]:
+        return False
+    else:
+        api.LocalLB.VirtualServer.set_type(
+                            virtual_servers=[virtualserver],
+                            types=[type])
+        return True
+
+
+
+# ===========================================
+# main loop
+#
+
+PROTOCOL_TYPES = ['any', 'ipv6', 'routing', 'none', 'fragment', 'dstopts', 'tcp', 'udp', 'icmp', 'icmpv6', 'ospf', 'sctp']
+RESOURCE_TYPES = ['pool', 'ip_forwarding', 'l2_forwarding', 'reject', 'fast_l4', 'fast_http', 'stateless']
+PROFILE_CONTEXT_TYPES = ['all', 'client', 'server']
+
+def main():
+
+    module = AnsibleModule(
+        argument_spec = dict(
+            server    = dict(required=True),
+            user      = dict(required=True),
+            password  = dict(required=True),
+            state     = dict(default='present', choices=['present', 'absent']),
+            partition = dict(default='Common'),
+
+            name      = dict(required=True),
+            description = dict(default=''),
+            address   = dict(required=True),
+            mask      = dict(required=True),
+            port      = dict(required=True),
+            protocol  = dict(required=True, choices=PROTOCOL_TYPES),
+
+            type      = dict(required=True, choices=RESOURCE_TYPES),
+            pool      = dict(required=False),
+
+            #profile_context = dict(default='all', choices=PROFILE_CONTEXT_TYPES),
+            #profile_name    = dict(required=False)
+        ),
+        supports_check_mode = True,
+        required_together = [['profile_context', 'profile_name'],
+                             ['address', 'name', 'port', 'mask']]
+
+    )
+
+    if not bigsuds_found:
+        module.fail_json(msg="the python bigsuds module is required")
+
+    server = module.params['server']
+    user = module.params['user']
+    password = module.params['password']
+    state = module.params['state']
+    partition = module.params['partition']
+    name = module.params['name']
+
+    # https://devcentral.f5.com/wiki/iControl.Common__VirtualServerDefinition.ashx
+    virtualserver = '/' + partition + '/' name
+    address = module.params['address']
+    mask = module.params['mask']
+    port = module.params['port']
+    protocol = 'PROTOCOL_' + module.params['protocol'].upper()
+    virtual_server_definition = { 'name': virtualserver,
+                                  'address': address,
+                                  'port': port,
+                                  'protocol': protocol }
+
+    # https://devcentral.f5.com/wiki/iControl.LocalLB__VirtualServer__VirtualServerResource.ashx
+    type = 'RESOURCE_TYPE_' + module.params['type'].upper()
+    default_pool_name = module.params['pool']
+    if 'forwarding' in module.params['type']:
+        if default_pool_name is None:
+            default_pool_name = ''
+        elif len(default_pool_name) > 0:
+            module.fail_json(msg="If the virtual server type is a forwarding type, the pool name should be empty.")
+    elif default_pool_name is None or default_pool_name = '':
+        module.fail_json(msg="If the virtual server type is not a forwarding type, the pool name should be set.")
+    virtual_server_resource = { 'type': type,
+                                'default_pool_name': default_pool_name }
+
+    # https://devcentral.f5.com/wiki/iControl.LocalLB__VirtualServer__VirtualServerResource.ashx
+
+
+
+    api = bigip_api(server, user, password)
+    result = {}
+    virtual_exists = check_virtual_exists(module, api, virtualserver)
+
+
+
+    module.exit_json(**result)
+
+
+# include magic from lib/ansible/module_common.py
+#<<INCLUDE_ANSIBLE_MODULE_COMMON>>
+main()
+
