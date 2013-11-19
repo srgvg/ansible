@@ -1,9 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
-# (c) 2013, serge van Ginderachter <serge@vanginderachter.be>
-# based on Matt Hite's bigip_pool module
-# (c) 2013, Matt Hite <mhite@hotmail.com>
+# (c) 2013, Serge van Ginderachter <serge@vanginderachter.be>
 #
 # This file is part of Ansible
 #
@@ -92,12 +90,12 @@ def bigip_api(bigip, user, password):
     return api
 
 
-def virtual_exists(module, api, virtualserver):
+def check_virtual_exists(module, api, virtualserver):
 
     # hack to check if virtual exists
     try:
         api.LocalLB.VirtualServer.get_description(virtual_servers=[virtualserver])
-    except: bigsuds.OperationFailed, error:
+    except bigsuds.OperationFailed, e:
         if 'requested virtual server' in str(e) and 'was not found' in str(e):
             return False
         else:
@@ -109,38 +107,43 @@ def virtual_exists(module, api, virtualserver):
 
 def create_virtual(module, api, virtualserver, virtual_server_definition, virtual_server_resource, mask, profile=[{}]):
 
-    try: 
-        api.LocalLB.VirtualServer.create(definitions=[virtual_server_definition], 
-                                                      wildmasks=[mask], 
-                                                      resources=[virtual_server_resource], 
-                                                      profiles=[profile])
-    except bigsuds.OperationFailed, e:
-        if "already exists" in str(e):
-            return False
-        else:
+    if not module.check_mode:
+        try: 
+            api.LocalLB.VirtualServer.create(definitions=[virtual_server_definition], 
+                                                          wildmasks=[mask], 
+                                                          resources=[virtual_server_resource], 
+                                                          profiles=[profile])
+        except bigsuds.OperationFailed, e:
+            if "already exists" in str(e):
+                return False
+            else:
+                module.fail_json(msg=error)
+        except Exception as error:
             module.fail_json(msg=error)
-    except Exception as error:
-        module.fail_json(msg=error)
-    # in some cases the create method silently does nothing
-    # e.g. when an empty resource struct is passed
-    if virtual_exists(module, api, virtualserver):
-        return True
+        # in some cases the create method silently does nothing
+        # e.g. when an empty resource struct is passed
+        # so double check it really was created
+        if check_virtual_exists(module, api, virtualserver):
+            return True
+        else:
+            module.fail_json(msg="No VirtualServer was created. You might have missing parameters.")
     else:
-        module.fail_json(msg="No VirtualServer was created. You might have missing parameters.")
+        return True
 
 
 def delete_virtual(module, api, virtualserver):
 
-    try:
-        api.LocalLB.VirtualServer.delete_virtual_server(virtual_servers=[virtualserver])
-    except bigsuds.OperationFailed, e:
-        # maybe it was deleted since we checked
-        if 'requested virtual server' in str(e) and 'was not found' in str(e):
-            return False
-        else:
+    if not module.check_mode:
+        try:
+            api.LocalLB.VirtualServer.delete_virtual_server(virtual_servers=[virtualserver])
+        except bigsuds.OperationFailed, e:
+            # maybe it was deleted since we checked
+            if 'requested virtual server' in str(e) and 'was not found' in str(e):
+                return False
+            else:
+                module.fail_json(msg=error)
+        except Exception as error:
             module.fail_json(msg=error)
-    except Exception as error:
-        module.fail_json(msg=error)
     return True
 
 def update_description(module, api, virtualserver, description):
@@ -150,9 +153,10 @@ def update_description(module, api, virtualserver, description):
     if cur_desc == [description]:
         return False
     else:
-        api.LocalLB.VirtualServer.set_description(
-                            virtual_servers=[virtualserver],
-                            descriptions=[descriptions])
+        if not module.check_mode:
+            api.LocalLB.VirtualServer.set_description(
+                                virtual_servers=[virtualserver],
+                                descriptions=[description])
         return True
         
 
@@ -163,9 +167,10 @@ def update_destination(module, api, virtualserver, addressport):
     if cur_ap == [addressport]:
         return False
     else:
-        api.LocalLB.VirtualServer.set_destination_v2(
-                            virtual_servers=[virtualserver],
-                            destinations=[addressport])
+        if not module.check_mode:
+            api.LocalLB.VirtualServer.set_destination_v2(
+                                virtual_servers=[virtualserver],
+                                destinations=[addressport])
         return True
         
 
@@ -176,9 +181,10 @@ def update_wildmask(module, api, virtualserver, mask):
     if cur_mask == [mask]:
         return False
     else:
-        api.LocalLB.VirtualServer.set_wildmask(
-                            virtual_servers=[virtualserver],
-                            wildmasks=[mask])
+        if not module.check_mode:
+            api.LocalLB.VirtualServer.set_wildmask(
+                                virtual_servers=[virtualserver],
+                                wildmasks=[mask])
         return True
         
 
@@ -189,22 +195,25 @@ def update_protocol(module, api, virtualserver, protocol):
     if cur_protocol == [protocol]:
         return False
     else:
-        api.LocalLB.VirtualServer.set_protocol(
-                            virtual_servers=[virtualserver],
-                            protocols=[protocol])
+        if not module.check_mode:
+            api.LocalLB.VirtualServer.set_protocol(
+                                virtual_servers=[virtualserver],
+                                protocols=[protocol])
         return True
         
 
 def update_pool(module, api, virtualserver, pool):
     
-    cur_pool = api.LocalLB.VirtualServer.get_pool(
+    cur_pool = api.LocalLB.VirtualServer.get_default_pool_name(
                             virtual_servers=[virtualserver])
     if cur_pool == [pool]:
         return False
     else:
-        api.LocalLB.VirtualServer.set_protocol(
-                            virtual_servers=[virtualserver],
-                            pools=[pool])
+        if not module.check_mode:
+            api.LocalLB.VirtualServer.set_default_pool_name(
+                                virtual_servers=[virtualserver],
+                                default_pools=[pool])
+            #TODO doublecheck
         return True
 
 
@@ -213,12 +222,15 @@ def update_type(module, api, virtualserver, type):
     
     cur_type = api.LocalLB.VirtualServer.get_type(
                             virtual_servers=[virtualserver])
+    print cur_type, type
     if cur_type == [type]:
         return False
     else:
-        api.LocalLB.VirtualServer.set_type(
-                            virtual_servers=[virtualserver],
-                            types=[type])
+        if not module.check_mode:
+            api.LocalLB.VirtualServer.set_type(
+                                virtual_servers=[virtualserver],
+                                types=[type])
+            #TODO doublecheck
         return True
 
 
@@ -263,19 +275,25 @@ def main():
     if not bigsuds_found:
         module.fail_json(msg="the python bigsuds module is required")
 
+    check_mode = module.check_mode
+
     server = module.params['server']
     user = module.params['user']
     password = module.params['password']
     state = module.params['state']
     partition = module.params['partition']
     name = module.params['name']
+    description = module.params['description']
 
     # https://devcentral.f5.com/wiki/iControl.Common__VirtualServerDefinition.ashx
-    virtualserver = '/' + partition + '/' name
+    virtualserver = '/' + partition + '/' + name
     address = module.params['address']
+    if address[0] != '/':
+        address = '/' + partition + '/' + address
     mask = module.params['mask']
     port = module.params['port']
     protocol = 'PROTOCOL_' + module.params['protocol'].upper()
+    addressport = { 'address': address, 'port': port }
     virtual_server_definition = { 'name': virtualserver,
                                   'address': address,
                                   'port': port,
@@ -284,23 +302,52 @@ def main():
     # https://devcentral.f5.com/wiki/iControl.LocalLB__VirtualServer__VirtualServerResource.ashx
     type = 'RESOURCE_TYPE_' + module.params['type'].upper()
     default_pool_name = module.params['pool']
+    if default_pool_name[0] != '/':
+        default_pool_name = '/' + partition + '/' + default_pool_name
     if 'forwarding' in module.params['type']:
         if default_pool_name is None:
             default_pool_name = ''
         elif len(default_pool_name) > 0:
             module.fail_json(msg="If the virtual server type is a forwarding type, the pool name should be empty.")
-    elif default_pool_name is None or default_pool_name = '':
+    elif default_pool_name is None or default_pool_name == '':
         module.fail_json(msg="If the virtual server type is not a forwarding type, the pool name should be set.")
     virtual_server_resource = { 'type': type,
                                 'default_pool_name': default_pool_name }
 
-    # https://devcentral.f5.com/wiki/iControl.LocalLB__VirtualServer__VirtualServerResource.ashx
 
 
 
+
+    ## main logic
+    #
     api = bigip_api(server, user, password)
     result = {}
     virtual_exists = check_virtual_exists(module, api, virtualserver)
+
+    # check mode is handled by the subroutines
+    if state == 'absent':
+        if not virtual_exists:
+            result['changed'] = False
+        else: # exists, delete it
+            result['changed'] = delete_virtual(module, api, virtualserver)
+    else: # else state present
+        if not virtual_exists: # doesn't exist, create it
+            # use minimal parameters at creation time
+            result['changed'] = create_virtual(module, api, virtualserver, 
+                                               virtual_server_definition, 
+                                                virtual_server_resource, 
+                                                mask, 
+                                                profile=[{}])
+        else: # exists, update base parameters
+            # update stuff set at creation: virtual_server_definition and _resource
+            result['changed'] = (   update_destination(module, api, virtualserver, addressport)
+                                 or update_protocol(module, api, virtualserver, protocol)
+                                 or update_wildmask(module, api, virtualserver, mask)
+                                 or update_pool(module, api, virtualserver, default_pool_name)
+                                 or update_type(module, api, virtualserver, type))
+        # set or update things not set at creation
+        result['changed'] |= update_description(module, api, virtualserver, description)
+
 
 
 
