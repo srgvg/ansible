@@ -208,6 +208,7 @@ debian: sdist
 	    tar -C deb-build/$${DIST} -xvf dist/$(NAME)-$(VERSION).tar.gz ; \
 	    cp -a packaging/debian deb-build/$${DIST}/$(NAME)-$(VERSION)/ ; \
 	    sed -ie "s#^$(NAME) (\([^)]*\)) \([^;]*\);#ansible (\1-$(DEB_RELEASE)~$${DIST}) $${DIST};#" deb-build/$${DIST}/$(NAME)-$(VERSION)/debian/changelog ; \
+	    sed -ie "s#^__version__.*#__version__ = '$(VERSION)-$(DEB_RELEASE)'#"  deb-build/$${DIST}/$(NAME)-$(VERSION)/lib/ansible/__init__.py ; \
 	done
 
 deb: debian
