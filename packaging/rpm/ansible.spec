@@ -96,6 +96,7 @@ mkdir -p %{buildroot}/%{_mandir}/man1/
 cp -v docs/man/man1/*.1 %{buildroot}/%{_mandir}/man1/
 mkdir -p %{buildroot}/%{_datadir}/ansible
 cp -rv library/* %{buildroot}/%{_datadir}/ansible/
+sed -ie "s#^__version__.*#__version__ = '%{version}-%{release}'#"  %{buildroot}%{python_sitelib}/ansible/__init__.py
 
 %clean
 rm -rf %{buildroot}
