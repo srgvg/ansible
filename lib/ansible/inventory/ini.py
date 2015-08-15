@@ -149,11 +149,11 @@ class InventoryParser(object):
                 expected = state or 'host'
                 raise AnsibleError("%s:%d: Expected comment, section, or %s definition, got: %s" % (self.filename, i, expected, line))
 
-        # Any entries in pending_declarations not removed by a group declaration
+        # Any entries in pending_declaration not removed by a group declaration
         # above mean that there was an unresolved forward reference. We report
         # only the first such error here.
 
-        for g in pending_declarations:
+        for g in pending_declaration:
             if g.state == 'vars':
                 raise AnsibleError("%s:%d: Can't define variables for undefined group %s" % (self.filename, g.line, g.name))
             elif g.state == 'children':
