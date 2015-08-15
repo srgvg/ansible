@@ -81,7 +81,7 @@ class InventoryParser(object):
             i += 1
 
             # Skip empty lines and comments
-            if line == '' or line.startswith(";") or line.startswith("#"):
+            if line == '\n' or line.startswith(";") or line.startswith("#"):
                 continue
 
             # Is this a section header? That tells us what group we're parsing
