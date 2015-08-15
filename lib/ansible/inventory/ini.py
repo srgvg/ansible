@@ -1,4 +1,4 @@
-# (c) 2012-2014, Michael DeHaan <michael.dehaan@gmail.com>
+# Copyright 2015 Abhijit Menon-Sen <ams@2ndQuadrant.com>
 #
 # This file is part of Ansible
 #
@@ -33,25 +33,170 @@ from ansible.utils.unicode import to_unicode
 
 class InventoryParser(object):
     """
-    Host inventory for ansible.
+    Ansible INI-format inventory parser
     """
 
     def __init__(self, filename=C.DEFAULT_HOST_LIST):
         self.filename = filename
 
+        # Start with an empty host list and the default 'all' and
+        # 'ungrouped' groups.
+
+        self.hosts = {}
+        self.patterns = {}
+        self.groups = dict(
+            all = Group(name='all'),
+            ungrouped = Group(name='ungrouped')
+        )
+
+        # Read in the hosts, groups, and variables defined in the
+        # inventory file.
+
         with open(filename) as fh:
             self.lines = fh.readlines()
-            self.groups = {}
-            self.hosts = {}
             self._parse()
 
-    def _parse(self):
+        # Finally, add all top-level groups (including 'ungrouped') as
+        # children of 'all'.
 
-        self._parse_base_groups()
-        self._parse_group_children()
-        self._add_allgroup_children()
-        self._parse_group_variables()
-        return self.groups
+        for group in self.groups.values():
+            if group.depth == 0 and group.name != 'all':
+                self.groups['all'].add_child_group(group)
+
+    def _parse(self):
+        pending_declaration = {}
+
+        self._compile_patterns()
+
+        # We pretend that the first line is '[ungrouped]' and that we expect to
+        # find host definitions. Then we make a single pass through each line of
+        # the inventory, building up self.groups and adding hosts, subgroups,
+        # and setting variables as we go.
+
+        section = 'ungrouped'
+        state = ''
+
+        i = 0
+        for line in self.lines:
+            i += 1
+
+            # Skip empty lines and comments
+            if line == '' or line.startswith(";") or line.startswith("#"):
+                continue
+
+            # Is this a section header? That tells us what group we're parsing
+            # definitions for, and what kind of definitions to expect.
+
+            m = self.patterns['section'].match(line)
+            if m:
+                (section, state) = m.groups()
+
+                # If we haven't seen this section before, we add a new Group.
+                #
+                # Either [groupname] or [groupname:children] is sufficient to
+                # declare a group, but [groupname:vars] is allowed only if the
+                # group is declared elsewhere (not necessarily earlier). We add
+                # the group anyway, but make a note in pending_declaration and
+                # check at the end.
+
+                if section not in self.groups:
+                    self.groups[section] = Group(name=section)
+
+                    if state == 'vars':
+                        pending_declaration[section] = dict(
+                            line=i, state=state, name=section
+                        )
+                    elif section in pending_declaration:
+                        del pending_declaration[section]
+
+                continue
+
+            # It's not a section, so the current state tells us what kind of
+            # definition it must be. The individual parsers will raise an
+            # error if we feed them something they can't digest.
+
+            # [groupname] contains host definitions that must be added to
+            # the current group.
+            if state == '':
+                hosts = self._parse_host_definition(line, i)
+                for h in hosts:
+                    self.groups[section].add_host(h)
+
+            # [groupname:vars] contains variable definitions that must be
+            # applied to the current group.
+            elif state == 'vars':
+                (k, v) = self._parse_variable_definition(line, i)
+                self.groups[section].set_variable(k, v)
+
+            # [groupname:children] contains subgroup names that must be
+            # added as children of the current group. The subgroup names
+            # must themselves be declared as groups, but as before, they
+            # may only be declared later.
+            elif state == 'children':
+                child = self._parse_group_name(line, i)
+
+                if child not in self.groups:
+                    self.groups[child] = Group(name=child)
+                    pending_declaration[child] = dict(
+                        line=i, state=state,
+                        name=child, parent=section
+                    )
+
+                self.groups[section].add_child_group(self.groups[child])
+
+            # Sorry, we don't know what this line is.
+            else:
+                expected = state or 'host'
+                raise AnsibleError("%s:%d: Expected comment, section, or %s definition, got: %s" % (self.filename, i, expected, line))
+
+        # Any entries in pending_declarations not removed by a group declaration
+        # above mean that there was an unresolved forward reference. We report
+        # only the first such error here.
+
+        for g in pending_declarations:
+            if g.state == 'vars':
+                raise AnsibleError("%s:%d: Can't define variables for undefined group %s" % (self.filename, g.line, g.name))
+            elif g.state == 'children':
+                raise AnsibleError("%s:%d: Can't include undefined group %s in group %s" % (self.filename, g.line, g.name, g.parent))
+
+    def _parse_group_name(self, line, i):
+        '''
+        Takes a single line and tries to parse it as a group name. Returns the
+        group name if successful, or raises an error.
+        '''
+
+        m = self.patterns['groupname'].match(line)
+        if m:
+            return m.group(0)
+
+        raise AnsibleError("%s:%d: Expected group name, got: %s" % (self.filename, i, line))
+
+    def _parse_host_definition(self, line):
+        '''
+        Takes a single line and tries to parse it as a host definition. Returns
+        a list of Hosts if successful, or raises an error.
+        '''
+
+        # XXX Not yet finished.
+
+        raise AnsibleError("%s:%d: Expected host definition, got: %s" % (self.filename, i, line))
+
+    def _parse_variable_definition(self, line):
+        '''
+        Takes a string and tries to parse it as a variable definition. Returns
+        the key and value if successful, or raises an error.
+        '''
+
+        # TODO: We parse variable assignments as a key (anything to the left of
+        # an '='"), an '=', and a value (anything left) and leave the value to
+        # _parse_value to sort out. We should be more systematic here about
+        # defining what is acceptable, how quotes work, and so on.
+
+        if '=' in line:
+            (k, v) = [e.strip() for e in line.split("=", 1)]
+            return (k, self._parse_value(v))
+
+        raise AnsibleError("%s:%d: Expected key=value, got: %s" % (self.filename, i, line))
 
     @staticmethod
     def _parse_value(v):
@@ -68,158 +213,31 @@ class InventoryParser(object):
                 pass
         return to_unicode(v, nonstring='passthru', errors='strict')
 
-    # [webservers]
-    # alpha
-    # beta:2345
-    # gamma sudo=True user=root
-    # delta asdf=jkl favcolor=red
-
-    def _add_allgroup_children(self):
-
-        for group in self.groups.values():
-            if group.depth == 0 and group.name != 'all':
-                self.groups['all'].add_child_group(group)
-
-
-    def _parse_base_groups(self):
-        # FIXME: refactor
-
-        ungrouped = Group(name='ungrouped')
-        all = Group(name='all')
-        all.add_child_group(ungrouped)
-
-        self.groups = dict(all=all, ungrouped=ungrouped)
-        active_group_name = 'ungrouped'
-
-        i = 0
-        for line in self.lines:
-            i += 1
-            line = self._before_comment(line).strip()
-            if line.startswith("[") and line.endswith("]"):
-                active_group_name = line.replace("[","").replace("]","")
-                if ":vars" in line or ":children" in line:
-                    active_group_name = active_group_name.rsplit(":", 1)[0]
-                    if active_group_name not in self.groups:
-                        new_group = self.groups[active_group_name] = Group(name=active_group_name)
-                    active_group_name = None
-                elif active_group_name not in self.groups:
-                    new_group = self.groups[active_group_name] = Group(name=active_group_name)
-            elif line.startswith(";") or line == '':
-                pass
-            elif active_group_name:
-                try:
-                    tokens = shlex.split(line)
-                except ValueError as e:
-                    raise AnsibleError("Error in %s, unable to parse L#%d: %s\n\n\t%s\n" % (self.filename, i, str(e), line))
-
-                if len(tokens) == 0:
-                    continue
-                hostname = tokens[0]
-                port = None
-                # Three cases to check:
-                # 0. A hostname that contains a range pesudo-code and a port
-                # 1. A hostname that contains just a port
-                if hostname.count(":") > 1:
-                    # Possible an IPv6 address, or maybe a host line with multiple ranges
-                    # IPv6 with Port  XXX:XXX::XXX.port
-                    # FQDN            foo.example.com
-                    if hostname.count(".") == 1:
-                        (hostname, port) = hostname.rsplit(".", 1)
-                elif ("[" in hostname and
-                    "]" in hostname and
-                    ":" in hostname and
-                    (hostname.rindex("]") < hostname.rindex(":")) or
-                    ("]" not in hostname and ":" in hostname)):
-                        (hostname, port) = hostname.rsplit(":", 1)
-
-                hostnames = []
-                if detect_range(hostname):
-                    hostnames = expand_hostname_range(hostname)
-                else:
-                    hostnames = [hostname]
-
-                for hn in hostnames:
-                    host = None
-                    if hn in self.hosts:
-                        host = self.hosts[hn]
-                    else:
-                        host = Host(name=hn, port=port)
-                        self.hosts[hn] = host
-                    if len(tokens) > 1:
-                        for t in tokens[1:]:
-                            if t.startswith('#'):
-                                break
-                            try:
-                                (k,v) = t.split("=", 1)
-                            except ValueError, e:
-                                raise AnsibleError("Invalid ini entry in %s: %s - %s" % (self.filename, t, str(e)))
-                            v = self._parse_value(v)
-                            if k == 'ansible_ssh_host':
-                                host.ipv4_address = v
-                            host.set_variable(k, v)
-                    self.groups[active_group_name].add_host(host)
-
-    # [southeast:children]
-    # atlanta
-    # raleigh
-
-    def _parse_group_children(self):
-        group = None
-
-        for line in self.lines:
-            line = line.strip()
-            if line is None or line == '':
-                continue
-            if line.startswith("[") and ":children]" in line:
-                line = line.replace("[","").replace(":children]","")
-                group = self.groups.get(line, None)
-                if group is None:
-                    group = self.groups[line] = Group(name=line)
-            elif line.startswith("#") or line.startswith(";"):
-                pass
-            elif line.startswith("["):
-                group = None
-            elif group:
-                kid_group = self.groups.get(line, None)
-                if kid_group is None:
-                    raise AnsibleError("child group is not defined: (%s)" % line)
-                else:
-                    group.add_child_group(kid_group)
-
-
-    # [webservers:vars]
-    # http_port=1234
-    # maxRequestsPerChild=200
-
-    def _parse_group_variables(self):
-        group = None
-        for line in self.lines:
-            line = line.strip()
-            if line.startswith("[") and ":vars]" in line:
-                line = line.replace("[","").replace(":vars]","")
-                group = self.groups.get(line, None)
-                if group is None:
-                    raise AnsibleError("can't add vars to undefined group: %s" % line)
-            elif line.startswith("#") or line.startswith(";"):
-                pass
-            elif line.startswith("["):
-                group = None
-            elif line == '':
-                pass
-            elif group:
-                if "=" not in line:
-                    raise AnsibleError("variables assigned to group must be in key=value form")
-                else:
-                    (k, v) = [e.strip() for e in line.split("=", 1)]
-                    group.set_variable(k, self._parse_value(v))
-
     def get_host_variables(self, host):
         return {}
 
-    def _before_comment(self, msg):
-        ''' what's the part of a string before a comment? '''
-        msg = msg.replace("\#","**NOT_A_COMMENT**")
-        msg = msg.split("#")[0]
-        msg = msg.replace("**NOT_A_COMMENT**","#")
-        return msg
+    def _compile_patterns(self):
+        '''
+        Compiles the regular expressions required to parse the inventory and
+        stores them in self.patterns.
+        '''
 
+        # TODO: What are the real restrictions on group names, or rather, what
+        # should they be? At the moment, they must be non-empty sequences of non
+        # whitespace characters excluding ':' and ']'.
+
+        self.patterns['groupname'] = re.compile('^([^:\]\s]+)')
+
+        # Section names are square-bracketed expressions at the beginning of a
+        # line, comprising (1) a group name optionally followed by (2) a tag
+        # that specifies the contents of the section. We ignore any trailing
+        # whitespace and/or the beginning of a comment.
+
+        self.patterns['section'] = re.compile(
+            r'''^\[
+                    ([^:\]\s]+)             # group name
+                    (?::(vars|children))?   # optional : and tag name
+                \]
+                \s*#*                       # ignore trailing comments
+            ''', re.X
+        )
