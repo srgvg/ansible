@@ -171,7 +171,7 @@ class InventoryParser(object):
 
         raise AnsibleError("%s:%d: Expected group name, got: %s" % (self.filename, i, line))
 
-    def _parse_host_definition(self, line):
+    def _parse_host_definition(self, line, i):
         '''
         Takes a single line and tries to parse it as a host definition. Returns
         a list of Hosts if successful, or raises an error.
